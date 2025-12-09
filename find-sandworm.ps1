@@ -52,7 +52,7 @@ function Find-Sandworm
         # List of packages, one per line.
         ######
         $packagesPath = ".\compromised-packages.txt"
-        $npmPackages = @{ }
+        $npmPackages = [System.Collections.Generic.List[NpmPackage]]::new()
     
         #####
         # File names to search for.
@@ -62,7 +62,8 @@ function Find-Sandworm
         ######
         # All output goes to host and this file.
         ######
-        $logFileName = ".\" + $compInfo.CsName + ".txt"
+        $startDate = Get-Date -Format FileDateTime
+        $logFileName = ".\" + $compInfo.CsName + "_" + $startDate + ".txt"
         
         #######################
         # Helper Functions    #
@@ -92,10 +93,12 @@ function Find-Sandworm
 
             if ($fileExtension -eq "txt") {
                 foreach ($line in $fileContent) {
-                    if (!($line.StartsWith("#"))) {
-                        $npmPackages.Add([NpmPackage]::new(@{
-                            $pkgColonVer = $line
-                        }))
+                    if (!($line.StartsWith("#")) -and $line.Length -gt 0) {
+                        $packageObj = [NpmPackage]::new(@{
+                            pkgColonVer = $line
+                        })
+                        
+                        $npmPackages.Add($packageObj)
                     }
                 }
             }
@@ -151,12 +154,14 @@ function Find-Sandworm
             $timeStamp = Get-Date -Format FileDateTime
             $message = $timeStamp + " | " + $message
             $message | Out-File -FilePath $logFileName -Append -NoClobber
-            $message | Out-Host
+            #$message | Out-Host
         }
 
         #######################
         # Main                #
         #######################
+        Clear-Host
+        $PSStyle.Progress.View = 'Classic'
         Log("Sandworm finder.... go!")
 
         AppendToLog(Get-ComputerInfo)
@@ -165,7 +170,7 @@ function Find-Sandworm
 
         $diskDrives = Get-PSDrive -PSProvider 'FileSystem' | where-object { $_.Name -ne "Temp" }
     
-        Log("Found " + $diskDrives.Count + " drives on the system.")
+        Log("Found " + $diskDrives.Count + " drive(s) on the system.")
     
         #####
         # Test if git is installed, so we can later check for naughty branches.
@@ -181,58 +186,101 @@ function Find-Sandworm
         {
             # Note:  If the user running this script does not have `git` in their path, then their git install is bad
             #        and should feel bad.  The author of this script is not about to hunt down their git executable.
-            Out-Host "Git is not installed or is not in the current users PATH."
+            Log("Git is not installed or is not in the current users PATH.")
         }
     
         #####
         # Loop through all disk drives on the system.
         #####
+        $diskIterator = 1
         foreach ($disk in $diskDrives)
         {
+            Log("Scanning " + $disk.Root + " out of " + $diskDrives.Count + " disks.")
+            $diskProgressParams = @{
+                Id = 0
+                Activity = "Scanning system"
+                Status = "Drive " + ($diskIterator) + " out of " + $diskDrives.Count
+                PercentComplete = ($diskIterator / $diskDrives.Count) * 100
+                CurrentOperation = "Scanning drive " + $disk.Root
+            }
+            Write-Progress @diskProgressParams
+
             if ($gitExists -eq $true)
-            {
-                Log("Searching " + $disk.Name + " for git repositories.")
-    
+            {    
                 #####
                 # Look for directories called ".git" to identify repositories.
                 #####
-                $repositories = Get-ChildItem -Path $disk -Directory ".git" -Recurse -Force -ErrorAction SilentlyContinue
+                $repositories = Get-ChildItem -Path $disk.Root -Directory ".git" -Recurse -Force -ErrorAction SilentlyContinue
     
                 if ($repositories.Count -gt 0)
                 {
-                    Log("Found " + $repositories.Count + " git repos.")
+                    Log("Found " + $repositories.Count + " git repositories.")
+
+                    $repoIterator = 1
                     foreach ($repoDir in $repositories)
                     {
+                        $repoProgressParams = @{
+                            Id = 1
+                            ParentId = 0
+                            Activity = "Scanning repositories"
+                            Status = "Repository " + ($repoIterator) + " out of " + $repositories.Count
+                            PercentComplete = ($repoIterator / $repositories.Count) * 100
+                            CurrentOperation = $repoDir.Parent.ToString()
+                        }
+
+                        Log("Scanning repository at " + $repoDir.Parent.ToString())
+                        Write-Progress @repoProgressParams
+
                         #####
                         # Check for branches with malicious name.
                         #####
-                        $badBranches = git -C $repoDir.Parent ls-remote --heads origin | Select-String -pattern $maliciousBranchName
+                        $badBranches = git -C $repoDir.Parent.ToString() ls-remote --heads origin | Select-String -pattern $maliciousBranchName
                         if ($badBranches.Count -gt 0)
                         {
-                            Log("Suspicious branch(es) found:"):
+                            Log("Found " + $badBranches.Count + " suspicious branch(es):")
                             AppendToLog($badBranches)
-                        }
-                        else {
-                            Log("Repository at " + $repoDir + " is clear of suspicious branches.")
                         }
     
                         #####
                         # Look for dirty packages referenced by NPM JSON files
                         #####
-                        $npmFilesFound = Get-Childitem -Path $repoDir -Include $npmFileNames -Recurse -force -ErrorAction SilentlyContinue
-    
+                        $npmFilesFound = Get-Childitem -Path $repoDir.Parent.ToString() -Include $npmFileNames -Recurse -force -ErrorAction SilentlyContinue
+                        $dirtyFileCount = 0;
                         if ($npmFilesFound.Count -gt 0)
                         {
-                            Log("Found " + $npmFilesFound.Count + " files to scan in " + $repoDir)
+                            Log("Found " + $npmFilesFound.Count + " NPM files to scan.")
     
+                            $npmFileIterator = 1
                             foreach ($npmFileFound in $npmFilesFound) {
+                                $npmProgressParams = @{
+                                    Id = 2
+                                    ParentId = 1
+                                    Activity = "Scanning npm package files"
+                                    Status = "File " + ($npmFileIterator) + " out of " + $npmFilesFound.Count
+                                    PercentComplete = ($npmFileIterator / $npmFilesFound.Count) * 100
+                                    CurrentOperation = $npmFileFound.ToString()
+                                }
+
+                                Write-Progress @npmProgressParams
                                 $dirtyFile = $false
-                                $jsonFile = Get-Content -Raw $npmFileFound | ConvertFrom-Json
+                                
+                                $jsonFile = Get-Content -Raw -Path $npmFileFound.ToString() | ConvertFrom-Json -AsHashtable
                                 
                                 if ($npmfileFound.Name -eq "package.json") {
-                                    $foundPackages = @{}
+                                    $foundPackages = [System.Collections.Generic.List[NpmPackage]]::new()
 
+                                    $pkgIterator = 1
                                     foreach ($pkg in $npmPackages) {
+                                        $pkgProgressParams = @{
+                                            Id = 3
+                                            ParentId = 2
+                                            Activity = "Scanning package.json references"
+                                            Status = "Package ref " + ($pkgIterator) + " out of " + $npmPackages.Count
+                                            PercentComplete = ($pkgIterator / $npmPackages.Count) * 100
+                                            CurrentOperation = $pkg.ToString()
+                                        }
+                                        
+                                        Write-Progress @pkgProgressParams
                                         $packageVersion = $jsonFile.dependencies.$pkg
 
                                         if ($null -ne $packageVersion) {
@@ -244,6 +292,12 @@ function Find-Sandworm
                                         if ($null -ne $devPackageVer) {
                                             $foundPackages += $pkg
                                         }
+
+                                        $pkgIterator++
+                                        if ($pkgIterator -gt $npmPackages.Count) {
+                                            $pkgProgressParams.IsComplete = $true
+                                        }
+                                        Write-Progress @pkgProgressParams
                                     }
 
                                     if ($foundPackages.Count -gt 0)
@@ -259,36 +313,67 @@ function Find-Sandworm
                                     $matchingLines = $jsonFileText | Select-String -Pattern $pkg.PackageName -AllMatches
 
                                     if ($matchingLines.Count -gt 0) {
+                                        $dirtyFile = $true
                                         Log("File " + $npmFileFound.ToString() + " contains " + $matchingLines.Count + "possibly infected package(s).")
                                     }
                                 }
-    
-                                if ($dirtyFile -eq $false)
-                                {
-                                    Log("No suspicious packages in file " + $npmFileFound.ToString())
+
+                                if ($dirtyFile -eq $true) {
+                                    $dirtyFileCount++
                                 }
+
+                                $npmFileIterator++
+                                
+                                if ($npmFileIterator -gt $npmFilesFound) {
+                                    $npmProgressParams.IsComplete = $true
+                                }
+                                
+                                Write-Progress @npmProgressParams
                             }
+
+                            Log($dirtyFileCount.ToString() + " package files with references to infected package(s) out of " + $npmFilesFound.Count + " scanned.")
+                        } else {
+                            Log("No NPM files found in this repository.")
                         }
     
                         #####
                         # Look for malicious JS file(s).
                         #####
                         $javaScriptFilesFound = Get-ChildItem -Path $repoDir -Include "*.js" -Recurse -Force -ErrorAction SilentlyContinue
+                        $maliciousJsFileCount = 0
                         if ($javaScriptFilesFound.Count -gt 0)
                         {
                             Log("Found " + $javaScriptFilesFound.Count + " JS files in " + $repoDir)
-    
+                            $jsFileIterator = 1
                             foreach ($jsFile in $javaScriptFilesFound)
                             {
+                                $jsFileProgressParams = @{
+                                    Id = 4
+                                    ParentId = 2
+                                    Activity = "Scanning JavaScript files"
+                                    Status = "File " + ($jsFileIterator) + " out of " + $javaScriptFilesFound.Count
+                                    PercentComplete = ($jsFileIterator / $javaScriptFilesFound.Count) * 100
+                                    CurrentOperation = $jsFile.Name
+                                }
+                                Write-Progress @jsFileProgressParams
+
                                 $hash = Get-FileHash $jsFile -Algorithm SHA256
                                 if ($hash.Hash -eq $maliciousHash)
                                 {
                                     Log("SHA256 Hash of file at " + $jsFile.ToString() + " matches a known malicious file.")
+                                    $maliciousJsFileCount++
                                 }
+
+                                $jsFileIterator++
+                                if ($jsFileIterator -gt $javaScriptFilesFound.Count) {
+                                    jsFileProgressParams.IsComplete = $true
+                                }
+                                Write-Progress @jsFileProgressParams
                             }
-                        }
-                        else {
-                            Log("No JS files found in this repository.")
+
+                            Log($maliciousJsFileCount + "malicious JavaScript files out of " + $javaScriptFilesFound.Count + " scanned.")
+                        } else {
+                            Log("No JavaScript files found in this repository.")
                         }
     
                         #####
@@ -303,11 +388,31 @@ function Find-Sandworm
                             }
                         }
                         else {
-                            Log("No malicious workflow files found in this repository.")
+                            Log("No workflow files found in this repository.")
                         }
+
+                        $repoIterator++
+
+                        if ($repoIterator -gt $repositories.Count) {
+                            $repoProgressParams.IsComplete = $true
+                        }
+
+                        Write-Progress @repoProgressParams
                     }
                 }
+                else {
+                    Log("Did not find any git repositories on drive " + $disk.Name)
+                }
             }
+            else {
+                Log("Git does not exist on this system. Exiting.")
+            }
+
+            $diskIterator++
+            if ($diskIterator -gt $diskDrives) {
+                $diskProgressParams.IsComplete = $true
+            }
+            Write-Progress @diskProgressParams
         }
     }
 }
@@ -323,6 +428,12 @@ class NpmPackage {
     [string] $PackageVersion
 
     NpmPackage() { $this.Init(@{}) }
+
+    [void] Init([hashtable]$Properties) {
+        foreach ($Property in $Properties.Keys) {
+            $this.$Property = $properties.$Property
+        }
+    }
 
     # Constructor for package definitions formatted "package:version"
     NpmPackage([string] $pkgColonVer)
