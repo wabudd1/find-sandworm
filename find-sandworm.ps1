@@ -63,7 +63,7 @@ function Find-Sandworm
         # All output goes to host and this file.
         ######
         $startDate = Get-Date -Format FileDateTime
-        $logFileName = ".\" + $compInfo.CsName + "_" + $startDate + ".txt"
+        $logFileName = ""
         
         #######################
         # Helper Functions    #
@@ -162,9 +162,11 @@ function Find-Sandworm
         #######################
         Clear-Host
         $PSStyle.Progress.View = 'Classic'
+        $compyInfo = Get-ComputerInfo
+        $logFileName = ".\" + $compyInfo.CsName + "_" + $startDate + ".log"
         Log("Sandworm finder.... go!")
 
-        AppendToLog(Get-ComputerInfo)
+        AppendToLog($compyInfo)
 
         $npmPackages = parsePackageList($packagesPath)
 
@@ -262,59 +264,71 @@ function Find-Sandworm
                                 }
 
                                 Write-Progress @npmProgressParams
-                                $dirtyFile = $false
-                                
-                                $jsonFile = Get-Content -Raw -Path $npmFileFound.ToString() | ConvertFrom-Json -AsHashtable
-                                
-                                if ($npmfileFound.Name -eq "package.json") {
-                                    $foundPackages = [System.Collections.Generic.List[NpmPackage]]::new()
 
-                                    $pkgIterator = 1
-                                    foreach ($pkg in $npmPackages) {
-                                        $pkgProgressParams = @{
-                                            Id = 3
-                                            ParentId = 2
-                                            Activity = "Scanning package.json references"
-                                            Status = "Package ref " + ($pkgIterator) + " out of " + $npmPackages.Count
-                                            PercentComplete = ($pkgIterator / $npmPackages.Count) * 100
-                                            CurrentOperation = $pkg.ToString()
-                                        }
-                                        
-                                        Write-Progress @pkgProgressParams
-                                        $packageVersion = $jsonFile.dependencies.$pkg
-
-                                        if ($null -ne $packageVersion) {
-                                            $foundPackages += $pkg
-                                        }
-
-                                        $devPackageVer = $jsonFile.devDependencies.$pkg
-
-                                        if ($null -ne $devPackageVer) {
-                                            $foundPackages += $pkg
-                                        }
-
-                                        $pkgIterator++
-                                        if ($pkgIterator -gt $npmPackages.Count) {
-                                            $pkgProgressParams.IsComplete = $true
-                                        }
-                                        Write-Progress @pkgProgressParams
-                                    }
-
-                                    if ($foundPackages.Count -gt 0)
-                                    {
-                                        $dirtyFile = $true
-                                        Log("File " + $npmFileFound.ToString() + " contains " + $foundPackages.Count + "possibly infected package(s).")
-                                        AppendToLog($foundPackages)
-                                    }
+                                # Annoying intentionally malformed package.json
+                                if ($null -ne ($npmFileFound.ToString() | Select-String "malformed_package_json")) {
+                                    continue
                                 }
-                                elseif ($npmFileFound -eq "package-lock.json") {
-                                    $jsonFileText = Get-Content $npmFileFound
 
-                                    $matchingLines = $jsonFileText | Select-String -Pattern $pkg.PackageName -AllMatches
+                                $dirtyFile = $false
+                                try {
+                                    $jsonFile = Get-Content -Raw -Path $npmFileFound.ToString() | ConvertFrom-Json -AsHashtable
+                                }
+                                catch {
+                                    Log("Failed to parse file:  " + $npmFileFound.ToString())
+                                }
+                                
+                                if ($null -ne $jsonFile) {
+                                    if ($npmfileFound.Name -eq "package.json") {
+                                        $foundPackages = [System.Collections.Generic.List[NpmPackage]]::new()
 
-                                    if ($matchingLines.Count -gt 0) {
-                                        $dirtyFile = $true
-                                        Log("File " + $npmFileFound.ToString() + " contains " + $matchingLines.Count + "possibly infected package(s).")
+                                        $pkgIterator = 1
+                                        foreach ($pkg in $npmPackages) {
+                                            $pkgProgressParams = @{
+                                                Id = 3
+                                                ParentId = 2
+                                                Activity = "Scanning package.json references"
+                                                Status = "Package ref " + ($pkgIterator) + " out of " + $npmPackages.Count
+                                                PercentComplete = ($pkgIterator / $npmPackages.Count) * 100
+                                                CurrentOperation = $pkg.ToString()
+                                            }
+                                            
+                                            Write-Progress @pkgProgressParams
+                                            $packageVersion = $jsonFile.dependencies.$pkg
+
+                                            if ($null -ne $packageVersion) {
+                                                $foundPackages += $pkg
+                                            }
+
+                                            $devPackageVer = $jsonFile.devDependencies.$pkg
+
+                                            if ($null -ne $devPackageVer) {
+                                                $foundPackages += $pkg
+                                            }
+
+                                            $pkgIterator++
+                                            if ($pkgIterator -gt $npmPackages.Count) {
+                                                $pkgProgressParams.Completed = $true
+                                            }
+                                            Write-Progress @pkgProgressParams
+                                        }
+
+                                        if ($foundPackages.Count -gt 0)
+                                        {
+                                            $dirtyFile = $true
+                                            Log("File " + $npmFileFound.ToString() + " contains " + $foundPackages.Count + "possibly infected package(s).")
+                                            AppendToLog($foundPackages)
+                                        }
+                                    }
+                                    elseif ($npmFileFound -eq "package-lock.json") {
+                                        $jsonFileText = Get-Content $npmFileFound
+
+                                        $matchingLines = $jsonFileText | Select-String -Pattern $pkg.PackageName -AllMatches
+
+                                        if ($matchingLines.Count -gt 0) {
+                                            $dirtyFile = $true
+                                            Log("File " + $npmFileFound.ToString() + " contains " + $matchingLines.Count + "possibly infected package(s).")
+                                        }
                                     }
                                 }
 
@@ -324,8 +338,8 @@ function Find-Sandworm
 
                                 $npmFileIterator++
                                 
-                                if ($npmFileIterator -gt $npmFilesFound) {
-                                    $npmProgressParams.IsComplete = $true
+                                if ($npmFileIterator -gt $npmFilesFound.Count) {
+                                    $npmProgressParams.Completed = $true
                                 }
                                 
                                 Write-Progress @npmProgressParams
@@ -339,7 +353,7 @@ function Find-Sandworm
                         #####
                         # Look for malicious JS file(s).
                         #####
-                        $javaScriptFilesFound = Get-ChildItem -Path $repoDir -Include "*.js" -Recurse -Force -ErrorAction SilentlyContinue
+                        $javaScriptFilesFound = Get-ChildItem -Path $repoDir -Filter "*.js" -Recurse -Force -ErrorAction SilentlyContinue
                         $maliciousJsFileCount = 0
                         if ($javaScriptFilesFound.Count -gt 0)
                         {
@@ -366,7 +380,7 @@ function Find-Sandworm
 
                                 $jsFileIterator++
                                 if ($jsFileIterator -gt $javaScriptFilesFound.Count) {
-                                    jsFileProgressParams.IsComplete = $true
+                                    jsFileProgressParams.Completed = $true
                                 }
                                 Write-Progress @jsFileProgressParams
                             }
@@ -394,7 +408,7 @@ function Find-Sandworm
                         $repoIterator++
 
                         if ($repoIterator -gt $repositories.Count) {
-                            $repoProgressParams.IsComplete = $true
+                            $repoProgressParams.Completed = $true
                         }
 
                         Write-Progress @repoProgressParams
@@ -409,11 +423,14 @@ function Find-Sandworm
             }
 
             $diskIterator++
-            if ($diskIterator -gt $diskDrives) {
-                $diskProgressParams.IsComplete = $true
+            if ($diskIterator -gt $diskDrives.Count) {
+                $diskProgressParams.Completed = $true
             }
             Write-Progress @diskProgressParams
         }
+        
+        Log("All done.")
+        Write-Host "Done.  Results can be found in " + $logFileName
     }
 }
 
