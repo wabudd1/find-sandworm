@@ -11,3 +11,4 @@ contents.json,high
 environment.json,med
 trufflesecrets.json,high
 discussion.yml,high
+actionsSecrets.json,high
