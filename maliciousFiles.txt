@@ -1,0 +1,13 @@
+# File names known to be malicious.
+# Lines starting with # are ignored.
+# Format:  filename.extension,severity
+# Possibly values for severity:  low, med, high
+
+shai-hulud-workflow.yml,high
+
+# https://www.wiz.io/blog/shai-hulud-2-0-ongoing-supply-chain-attack
+cloud.json,low
+contents.json,high
+environment.json,med
+trufflesecrets.json,high
+discussion.yml,high

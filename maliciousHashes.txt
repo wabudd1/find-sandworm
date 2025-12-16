@@ -1,0 +1,15 @@
+# SHA256 hashes known to be malicious.
+# Lines starting with # are ignored.
+# Format:  hash,severity
+# Possibly values for severity:  low, med, high
+
+# https://www.stepsecurity.io/blog/ctrl-tinycolor-and-40-npm-packages-compromised#indicators-of-compromise
+# Setup_Bun.js
+a3894003ad1d293ba96d77881ccd2071446dc3f65f434669b49b3da92421901a,high
+# https://cirosec.de/en/news/a-collection-of-shai-hulud-2-0-iocs/
+# bun_environment.js
+f099c5d9ec417d4445a0328ac0ada9cde79fc37410914103ae9c609cbc0ee068,high
+# bun_environment.js
+62ee164b9b306250c1172583f138c9614139264f889fa99614903c12755468d0,high
+# bundle.js
+46faab8ab153fae6e80e7cca38eab363075bb524edd79e42269217a083628f09,high
